@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -15,9 +16,12 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
-	inputvalidatev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/inputvalidate/v1"
 	"github.com/santhosh-tekuri/jsonschema/v5"
+
+	inputvalidatev1 "github.com/Muxcore-Media/input-validate-jsonschema/muxcore/inputvalidate/v1"
 )
+
+var namedSchemaRe = regexp.MustCompile(`^[a-z][a-z0-9_.:-]{0,127}$`)
 
 type Module struct {
 	inputvalidatev1.UnimplementedInputValidateServiceServer
@@ -144,7 +148,13 @@ func (m *Module) validateJSON(schema string, data []byte) (*inputvalidatev1.Vali
 		}
 		compiledSchema = s
 	} else {
-		schemaPath := m.dataDir + "/" + schemaName + ".json"
+		schemaPath, err := m.resolveNamedSchemaPath(schemaName)
+		if err != nil {
+			return &inputvalidatev1.ValidateResponse{
+				Valid:  false,
+				Errors: []string{err.Error()},
+			}, nil
+		}
 		schemaBytes, err := os.ReadFile(schemaPath)
 		if err != nil {
 			return nil, fmt.Errorf("read schema file %s: %w", schemaPath, err)
@@ -211,8 +221,47 @@ func (m *Module) validateRegex(schema string, data []byte) (*inputvalidatev1.Val
 
 func (m *Module) SupportedSchemas(ctx context.Context, req *inputvalidatev1.SupportedSchemasRequest) (*inputvalidatev1.SupportedSchemasResponse, error) {
 	return &inputvalidatev1.SupportedSchemasResponse{
-		Schemas: []string{"json:<schema>", "regex:<pattern>"},
+		Schemas: []string{"json:<schema-name>", "json:{…}", "regex:<pattern>"},
 	}, nil
+}
+
+func (m *Module) resolveNamedSchemaPath(name string) (string, error) {
+	if strings.ContainsAny(name, `/\`) || name == "." || name == ".." || !namedSchemaRe.MatchString(name) {
+		return "", fmt.Errorf("invalid schema name %q: must match %s and must not contain path separators", name, namedSchemaRe.String())
+	}
+
+	base, err := filepath.Abs(m.dataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve data dir: %w", err)
+	}
+	base = filepath.Clean(base)
+	if resolvedBase, err := filepath.EvalSymlinks(base); err == nil {
+		base = resolvedBase
+	}
+
+	candidate := filepath.Clean(filepath.Join(base, name+".json"))
+	rel, err := filepath.Rel(base, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("schema path escapes data dir")
+	}
+
+	if fi, err := os.Lstat(candidate); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			resolved, err := filepath.EvalSymlinks(candidate)
+			if err != nil {
+				return "", fmt.Errorf("resolve schema symlink: %w", err)
+			}
+			resolved = filepath.Clean(resolved)
+			rel, err := filepath.Rel(base, resolved)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+				return "", fmt.Errorf("schema path escapes data dir")
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat schema path: %w", err)
+	}
+
+	return candidate, nil
 }
 
 func asValidationError(err error, target **jsonschema.ValidationError) bool {
