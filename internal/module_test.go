@@ -2,9 +2,11 @@ package internal
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
-	inputvalidatev1 "github.com/Muxcore-Media/core/proto/gen/muxcore/inputvalidate/v1"
+	inputvalidatev1 "github.com/Muxcore-Media/input-validate-jsonschema/muxcore/inputvalidate/v1"
 )
 
 func TestModuleInfo(t *testing.T) {
@@ -141,6 +143,87 @@ func TestValidateUnsupportedSchema(t *testing.T) {
 	}
 	if resp.Valid {
 		t.Fatal("expected invalid for unsupported schema type")
+	}
+}
+
+func TestValidateNamedSchemaRejectsTraversal(t *testing.T) {
+	m := NewModule(Config{DataDir: t.TempDir()})
+	ctx := context.Background()
+	data := []byte(`{}`)
+
+	for _, name := range []string{
+		"../etc/passwd",
+		"..\\etc\\passwd",
+		"foo/bar",
+		`foo\bar`,
+		".",
+		"..",
+		"Foo",
+		"",
+	} {
+		schema := "json:" + name
+		resp, err := m.Validate(ctx, &inputvalidatev1.ValidateRequest{
+			Schema: schema,
+			Data:   data,
+		})
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", name, err)
+		}
+		if resp.Valid {
+			t.Fatalf("%q: expected invalid", name)
+		}
+		if len(resp.Errors) == 0 {
+			t.Fatalf("%q: expected error message", name)
+		}
+	}
+}
+
+func TestValidateNamedSchemaFile(t *testing.T) {
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "user-create.json")
+	if err := os.WriteFile(schemaPath, []byte(`{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModule(Config{DataDir: dir})
+	ctx := context.Background()
+
+	resp, err := m.Validate(ctx, &inputvalidatev1.ValidateRequest{
+		Schema: "json:user-create",
+		Data:   []byte(`{"name":"alice"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Valid {
+		t.Fatalf("expected valid, got errors: %v", resp.Errors)
+	}
+}
+
+func TestValidateNamedSchemaRejectsEscapingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.json")
+	if err := os.WriteFile(outside, []byte(`{"type":"object"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "escape.json")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModule(Config{DataDir: dir})
+	resp, err := m.Validate(context.Background(), &inputvalidatev1.ValidateRequest{
+		Schema: "json:escape",
+		Data:   []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Valid {
+		t.Fatal("expected invalid for escaping symlink")
+	}
+	if len(resp.Errors) == 0 {
+		t.Fatal("expected error message")
 	}
 }
 
