@@ -64,11 +64,11 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Input Validate JSON Schema",
-		Version:      "0.1.1",
+		Version:      "0.1.2",
 		Roles:        []string{"infrastructure"},
 		Description:  "JSON Schema and regex based input validation provider",
 		Author:       "MuxCore",
-		Capabilities: []string{contracts.CapabilityInputValidate},
+		Capabilities: []string{contracts.CapabilityInputValidate, "settings"},
 		Contracts: []contracts.ContractDeclaration{
 			{
 				Repo:      "github.com/Muxcore-Media/core/pkg/contracts",
