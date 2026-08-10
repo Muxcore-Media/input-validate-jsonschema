@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 
 	inputvalidatev1 "github.com/Muxcore-Media/input-validate-jsonschema/muxcore/inputvalidate/v1"
@@ -63,7 +64,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Input Validate JSON Schema",
-		Version:      "0.1.0",
+		Version:      "0.1.1",
 		Roles:        []string{"infrastructure"},
 		Description:  "JSON Schema and regex based input validation provider",
 		Author:       "MuxCore",
@@ -93,6 +94,7 @@ func (m *Module) Init(ctx context.Context) error {
 func (m *Module) Start(ctx context.Context) error {
 	m.grpcSrv = grpc.NewServer()
 	inputvalidatev1.RegisterInputValidateServiceServer(m.grpcSrv, m)
+	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
 	go func() {
 		slog.Info("input-validate-jsonschema gRPC service started", "addr", m.grpcAddr)
 		if err := m.grpcSrv.Serve(m.lis); err != nil {
@@ -230,7 +232,10 @@ func (m *Module) resolveNamedSchemaPath(name string) (string, error) {
 		return "", fmt.Errorf("invalid schema name %q: must match %s and must not contain path separators", name, namedSchemaRe.String())
 	}
 
-	base, err := filepath.Abs(m.dataDir)
+	m.mu.RLock()
+	dataDir := m.dataDir
+	m.mu.RUnlock()
+	base, err := filepath.Abs(dataDir)
 	if err != nil {
 		return "", fmt.Errorf("resolve data dir: %w", err)
 	}
