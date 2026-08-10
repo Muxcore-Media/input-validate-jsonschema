@@ -260,3 +260,26 @@ func TestLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSettingsDataDirLive(t *testing.T) {
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dirB, "person.json"), []byte(`{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewModule(Config{DataDir: dirA, GRPCAddr: "127.0.0.1:0"})
+	defs := m.Settings()
+	if len(defs) != 1 || defs[0].Key != "data_dir" || defs[0].Value != dirA {
+		t.Fatalf("Settings=%+v", defs)
+	}
+	if err := m.UpdateSetting("data_dir", dirB); err != nil {
+		t.Fatal(err)
+	}
+	path, err := m.resolveNamedSchemaPath("person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(path) != dirB {
+		t.Fatalf("resolved path %q not under %q", path, dirB)
+	}
+}
