@@ -1,10 +1,15 @@
 {
   "name": "Input Validate JSON Schema",
   "description": "JSON Schema and regex based input validation provider",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "MuxCore",
-  "roles": ["infrastructure"],
-  "capabilities": ["input.validate"],
+  "roles": [
+    "infrastructure"
+  ],
+  "capabilities": [
+    "input.validate",
+    "settings"
+  ],
   "contracts": [
     {
       "repo": "github.com/Muxcore-Media/core/pkg/contracts",
