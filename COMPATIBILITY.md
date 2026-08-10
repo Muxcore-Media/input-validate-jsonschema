@@ -10,9 +10,9 @@
 
 | Capability | Status |
 |------------|--------|
-| (see muxcore.json) | Current |
+| `input.validate` | Current |
 
-Schema names must match `^[a-z][a-z0-9_.:-]{0,127}$`. Files resolve only under `VALIDATE_DATA_DIR`.
+Contract: `InputValidator`. Schema names must match `^[a-z][a-z0-9_.:-]{0,127}$`. Files resolve only under `VALIDATE_DATA_DIR`.
 
 ## Breaking Changes
 
