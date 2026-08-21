@@ -36,4 +36,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - JSON Schema (`json:…`) and regex (`regex:…`) input validation sidecar.
 - Named schema files under `VALIDATE_DATA_DIR` with path-traversal rejection.
-- gRPC listen default `:9660` (`VALIDATE_GRPC_ADDR`).
+- gRPC listen default `:9665` (`VALIDATE_GRPC_ADDR`).

@@ -16,7 +16,7 @@ A gRPC sidecar module that validates JSON payloads against JSON Schema (using `s
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `VALIDATE_GRPC_ADDR` | `:9660` | Module gRPC listen address |
+| `VALIDATE_GRPC_ADDR` | `:9665` | Module gRPC listen address |
 | `VALIDATE_DATA_DIR` | `./schemas` | Directory containing JSON Schema files (`{name}.json`) |
 | `MUXCORE_GRPC_ADDR` | (required) | Core mesh gRPC address (SDK; or `--muxcore-mesh-addr`) |
 | `MUXCORE_MODULE_ID` | `input-validate-jsonschema` | Registration ID override (SDK) |
