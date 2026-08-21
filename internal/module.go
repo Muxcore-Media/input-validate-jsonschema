@@ -46,7 +46,7 @@ func NewModule(cfg Config) *Module {
 		cfg.ID = "input-validate-jsonschema"
 	}
 	if cfg.GRPCAddr == "" {
-		cfg.GRPCAddr = ":9660"
+		cfg.GRPCAddr = ":9665"
 	}
 	if cfg.DataDir == "" {
 		cfg.DataDir = "./schemas"
