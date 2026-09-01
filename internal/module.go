@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -64,7 +66,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Input Validate JSON Schema",
-		Version:      "0.1.3",
+		Version:      Version,
 		Roles:        []string{"infrastructure"},
 		Description:  "JSON Schema and regex based input validation provider",
 		Author:       "MuxCore",
@@ -82,22 +84,29 @@ func (m *Module) Info() contracts.ModuleInfo {
 }
 
 func (m *Module) Init(ctx context.Context) error {
+	if err := os.MkdirAll(m.dataDir, 0o755); err != nil {
+		return fmt.Errorf("create data dir %s: %w", m.dataDir, err)
+	}
+
 	lis, err := net.Listen("tcp", m.grpcAddr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", m.grpcAddr, err)
 	}
 	m.lis = lis
-	slog.Info("input-validate-jsonschema initialized", "addr", m.grpcAddr)
+	slog.Info("input-validate-jsonschema initialized", "addr", m.grpcAddr, "data_dir", m.dataDir)
 	return nil
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.grpcSrv = grpc.NewServer()
-	inputvalidatev1.RegisterInputValidateServiceServer(m.grpcSrv, m)
-	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
+	maxRecv := defaultMaxPayloadBytes + 1024
+	srv := grpc.NewServer(grpc.MaxRecvMsgSize(maxRecv))
+	m.grpcSrv = srv
+	inputvalidatev1.RegisterInputValidateServiceServer(srv, m)
+	modulesdk.RegisterSettings(srv, m.id, m)
+	lis := m.lis
 	go func() {
 		slog.Info("input-validate-jsonschema gRPC service started", "addr", m.grpcAddr)
-		if err := m.grpcSrv.Serve(m.lis); err != nil {
+		if err := srv.Serve(lis); err != nil {
 			slog.Error("input-validate-jsonschema gRPC serve error", "error", err)
 		}
 	}()
@@ -107,24 +116,63 @@ func (m *Module) Start(ctx context.Context) error {
 func (m *Module) Stop(ctx context.Context) error {
 	if m.grpcSrv != nil {
 		m.grpcSrv.GracefulStop()
+		m.grpcSrv = nil
+	}
+	if m.lis != nil {
+		_ = m.lis.Close()
+		m.lis = nil
 	}
 	slog.Info("input-validate-jsonschema stopped")
 	return nil
 }
 
 func (m *Module) Health(ctx context.Context) error {
+	if m.lis == nil {
+		return fmt.Errorf("listener not initialized")
+	}
+	m.mu.RLock()
+	dir := m.dataDir
+	m.mu.RUnlock()
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("data dir %q: %w", dir, err)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("data dir %q is not a directory", dir)
+	}
 	return nil
+}
+
+// GRPCListenAddr returns the bound TCP address after Init.
+func (m *Module) GRPCListenAddr() string {
+	if m.lis != nil {
+		return m.lis.Addr().String()
+	}
+	return ""
 }
 
 func (m *Module) Validate(ctx context.Context, req *inputvalidatev1.ValidateRequest) (*inputvalidatev1.ValidateResponse, error) {
 	schema := req.GetSchema()
 	data := req.GetData()
 
+	if len(schema) > defaultMaxPayloadBytes {
+		return &inputvalidatev1.ValidateResponse{
+			Valid:  false,
+			Errors: []string{fmt.Sprintf("schema exceeds max size (%d > %d bytes)", len(schema), defaultMaxPayloadBytes)},
+		}, nil
+	}
+	if len(data) > defaultMaxPayloadBytes {
+		return &inputvalidatev1.ValidateResponse{
+			Valid:  false,
+			Errors: []string{fmt.Sprintf("data exceeds max size (%d > %d bytes)", len(data), defaultMaxPayloadBytes)},
+		}, nil
+	}
+
 	if strings.HasPrefix(schema, "json:") {
-		return m.validateJSON(schema, data)
+		return m.validateJSON(ctx, schema, data)
 	}
 	if strings.HasPrefix(schema, "regex:") {
-		return m.validateRegex(schema, data)
+		return m.validateRegex(ctx, schema, data)
 	}
 	return &inputvalidatev1.ValidateResponse{
 		Valid:  false,
@@ -132,7 +180,9 @@ func (m *Module) Validate(ctx context.Context, req *inputvalidatev1.ValidateRequ
 	}, nil
 }
 
-func (m *Module) validateJSON(schema string, data []byte) (*inputvalidatev1.ValidateResponse, error) {
+func (m *Module) validateJSON(ctx context.Context, schema string, data []byte) (*inputvalidatev1.ValidateResponse, error) {
+	_ = ctx
+
 	schemaName := strings.TrimPrefix(schema, "json:")
 	schemaName = strings.TrimSpace(schemaName)
 	if schemaName == "" {
@@ -142,11 +192,25 @@ func (m *Module) validateJSON(schema string, data []byte) (*inputvalidatev1.Vali
 		}, nil
 	}
 
+	m.mu.RLock()
+	dataDir := m.dataDir
+	m.mu.RUnlock()
+
 	var compiledSchema *jsonschema.Schema
 	if strings.HasPrefix(schemaName, "{") {
-		s, err := jsonschema.CompileString("schema.json", schemaName)
+		compiler := m.newSchemaCompiler(dataDir)
+		if err := compiler.AddResource("schema.json", strings.NewReader(schemaName)); err != nil {
+			return &inputvalidatev1.ValidateResponse{
+				Valid:  false,
+				Errors: []string{fmt.Sprintf("compile json schema: %v", err)},
+			}, nil
+		}
+		s, err := compiler.Compile("schema.json")
 		if err != nil {
-			return nil, fmt.Errorf("compile json schema: %w", err)
+			return &inputvalidatev1.ValidateResponse{
+				Valid:  false,
+				Errors: []string{fmt.Sprintf("compile json schema: %v", err)},
+			}, nil
 		}
 		compiledSchema = s
 	} else {
@@ -159,11 +223,31 @@ func (m *Module) validateJSON(schema string, data []byte) (*inputvalidatev1.Vali
 		}
 		schemaBytes, err := os.ReadFile(schemaPath)
 		if err != nil {
-			return nil, fmt.Errorf("read schema file %s: %w", schemaPath, err)
+			if os.IsNotExist(err) {
+				return &inputvalidatev1.ValidateResponse{
+					Valid:  false,
+					Errors: []string{fmt.Sprintf("schema file not found: %s", schemaName)},
+				}, nil
+			}
+			return &inputvalidatev1.ValidateResponse{
+				Valid:  false,
+				Errors: []string{fmt.Sprintf("read schema file %s: %v", schemaPath, err)},
+			}, nil
 		}
-		s, err := jsonschema.CompileString(schemaName+".json", string(schemaBytes))
+		compiler := m.newSchemaCompiler(dataDir)
+		url := schemaName + ".json"
+		if err := compiler.AddResource(url, bytes.NewReader(schemaBytes)); err != nil {
+			return &inputvalidatev1.ValidateResponse{
+				Valid:  false,
+				Errors: []string{fmt.Sprintf("compile json schema %q: %v", schemaName, err)},
+			}, nil
+		}
+		s, err := compiler.Compile(url)
 		if err != nil {
-			return nil, fmt.Errorf("compile json schema %q: %w", schemaName, err)
+			return &inputvalidatev1.ValidateResponse{
+				Valid:  false,
+				Errors: []string{fmt.Sprintf("compile json schema %q: %v", schemaName, err)},
+			}, nil
 		}
 		compiledSchema = s
 	}
@@ -179,9 +263,9 @@ func (m *Module) validateJSON(schema string, data []byte) (*inputvalidatev1.Vali
 	if err := compiledSchema.Validate(v); err != nil {
 		var ve *jsonschema.ValidationError
 		if ok := asValidationError(err, &ve); ok {
-			errs := make([]string, 0, len(ve.Causes))
-			for _, c := range ve.Causes {
-				errs = append(errs, fmt.Sprintf("%s: %s", c.InstanceLocation, c.Message))
+			errs := flattenValidationError(ve)
+			if len(errs) == 0 {
+				errs = []string{err.Error()}
 			}
 			return &inputvalidatev1.ValidateResponse{
 				Valid:  false,
@@ -200,19 +284,46 @@ func (m *Module) validateJSON(schema string, data []byte) (*inputvalidatev1.Vali
 	}, nil
 }
 
-func (m *Module) validateRegex(schema string, data []byte) (*inputvalidatev1.ValidateResponse, error) {
+func (m *Module) validateRegex(ctx context.Context, schema string, data []byte) (*inputvalidatev1.ValidateResponse, error) {
 	pattern := strings.TrimPrefix(schema, "regex:")
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return nil, fmt.Errorf("compile regex: %w", err)
+		return &inputvalidatev1.ValidateResponse{
+			Valid:  false,
+			Errors: []string{fmt.Sprintf("compile regex: %v", err)},
+		}, nil
 	}
 
 	str := string(bytes.TrimSpace(data))
-	if re.MatchString(str) {
+
+	matchCtx := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		matchCtx, cancel = context.WithTimeout(ctx, defaultRegexTimeout)
+		defer cancel()
+	}
+
+	type result struct {
+		matched bool
+	}
+	ch := make(chan result, 1)
+	go func() {
+		ch <- result{matched: re.MatchString(str)}
+	}()
+
+	select {
+	case <-matchCtx.Done():
 		return &inputvalidatev1.ValidateResponse{
-			Valid:     true,
-			Sanitized: []byte(str),
+			Valid:  false,
+			Errors: []string{"regex validation timed out"},
 		}, nil
+	case r := <-ch:
+		if r.matched {
+			return &inputvalidatev1.ValidateResponse{
+				Valid:     true,
+				Sanitized: []byte(str),
+			}, nil
+		}
 	}
 
 	return &inputvalidatev1.ValidateResponse{
@@ -222,9 +333,78 @@ func (m *Module) validateRegex(schema string, data []byte) (*inputvalidatev1.Val
 }
 
 func (m *Module) SupportedSchemas(ctx context.Context, req *inputvalidatev1.SupportedSchemasRequest) (*inputvalidatev1.SupportedSchemasResponse, error) {
-	return &inputvalidatev1.SupportedSchemasResponse{
-		Schemas: []string{"json:<schema-name>", "json:{…}", "regex:<pattern>"},
-	}, nil
+	_ = ctx
+	_ = req
+
+	schemas := []string{"json:{…}", "regex:<pattern>"}
+
+	m.mu.RLock()
+	dataDir := m.dataDir
+	m.mu.RUnlock()
+
+	entries, err := os.ReadDir(dataDir)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			name := strings.TrimSuffix(entry.Name(), ".json")
+			if namedSchemaRe.MatchString(name) {
+				schemas = append(schemas, "json:"+name)
+			}
+		}
+	}
+
+	return &inputvalidatev1.SupportedSchemasResponse{Schemas: schemas}, nil
+}
+
+func (m *Module) newSchemaCompiler(dataDir string) *jsonschema.Compiler {
+	base, err := m.resolveDataDirBase(dataDir)
+	if err != nil {
+		base = filepath.Clean(dataDir)
+	}
+
+	c := jsonschema.NewCompiler()
+	c.LoadURL = func(rawURL string) (io.ReadCloser, error) {
+		u, err := url.Parse(rawURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse schema reference %q: %w", rawURL, err)
+		}
+		switch strings.ToLower(u.Scheme) {
+		case "http", "https":
+			return nil, fmt.Errorf("remote schema references are not allowed: %s", rawURL)
+		case "file":
+			path := u.Path
+			if u.Host != "" && u.Host != "localhost" {
+				return nil, fmt.Errorf("schema reference outside data dir: %s", rawURL)
+			}
+			clean := filepath.Clean(path)
+			rel, err := filepath.Rel(base, clean)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+				return nil, fmt.Errorf("schema reference outside data dir: %s", rawURL)
+			}
+			f, err := os.Open(clean)
+			if err != nil {
+				return nil, fmt.Errorf("open schema reference %s: %w", rawURL, err)
+			}
+			return f, nil
+		default:
+			return nil, fmt.Errorf("unsupported schema reference: %s", rawURL)
+		}
+	}
+	return c
+}
+
+func (m *Module) resolveDataDirBase(dataDir string) (string, error) {
+	base, err := filepath.Abs(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve data dir: %w", err)
+	}
+	base = filepath.Clean(base)
+	if resolvedBase, err := filepath.EvalSymlinks(base); err == nil {
+		base = resolvedBase
+	}
+	return base, nil
 }
 
 func (m *Module) resolveNamedSchemaPath(name string) (string, error) {
@@ -235,13 +415,9 @@ func (m *Module) resolveNamedSchemaPath(name string) (string, error) {
 	m.mu.RLock()
 	dataDir := m.dataDir
 	m.mu.RUnlock()
-	base, err := filepath.Abs(dataDir)
+	base, err := m.resolveDataDirBase(dataDir)
 	if err != nil {
-		return "", fmt.Errorf("resolve data dir: %w", err)
-	}
-	base = filepath.Clean(base)
-	if resolvedBase, err := filepath.EvalSymlinks(base); err == nil {
-		base = resolvedBase
+		return "", err
 	}
 
 	candidate := filepath.Clean(filepath.Join(base, name+".json"))
@@ -267,6 +443,36 @@ func (m *Module) resolveNamedSchemaPath(name string) (string, error) {
 	}
 
 	return candidate, nil
+}
+
+func flattenValidationError(ve *jsonschema.ValidationError) []string {
+	if ve == nil {
+		return nil
+	}
+	var out []string
+	var walk func(*jsonschema.ValidationError)
+	walk = func(e *jsonschema.ValidationError) {
+		if len(e.Causes) == 0 {
+			loc := e.InstanceLocation
+			if loc == "" {
+				loc = e.AbsoluteKeywordLocation
+			}
+			if loc != "" {
+				out = append(out, fmt.Sprintf("%s: %s", loc, e.Message))
+			} else if e.Message != "" {
+				out = append(out, e.Message)
+			}
+			return
+		}
+		for _, c := range e.Causes {
+			walk(c)
+		}
+	}
+	walk(ve)
+	if len(out) == 0 && ve.Message != "" {
+		out = append(out, ve.Message)
+	}
+	return out
 }
 
 func asValidationError(err error, target **jsonschema.ValidationError) bool {

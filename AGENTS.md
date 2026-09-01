@@ -7,8 +7,8 @@ MuxCore sidecar module (`input-validate-jsonschema`). Workspace deploy and SSH: 
 | Field | Value |
 |-------|-------|
 | Directory | `input-validate-jsonschema` |
-| Capabilities | see muxcore.json |
-| Contracts | none declared |
+| Capabilities | `input.validate`, `settings` |
+| Contracts | `InputValidator` (`core/pkg/contracts`) |
 
 ## Agent rules
 
@@ -22,5 +22,5 @@ MuxCore sidecar module (`input-validate-jsonschema`). Workspace deploy and SSH: 
 
 ```bash
 cd input-validate-jsonschema
-go test ./...
+nix-shell -p go --run 'go test ./...'
 ```

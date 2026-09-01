@@ -8,7 +8,7 @@
 
 ### Changed
 
-- `muxcore.json` / `Info()` align `minCoreVersion` and contract pin to **0.5.0** (matches `go.mod` core **v0.5.2**)
+- `muxcore.json` / `Info()` align `minCoreVersion` and contract pin to **0.5.0** (matches `go.mod` core **v0.5.8**)
 
 ## [0.1.2] — 2026-08-10
 
