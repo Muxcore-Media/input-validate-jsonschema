@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Inbound gRPC serves TLS by default (`grpc.Creds`); auto-generates mesh-local certs under `~/.muxcore/tls/input-validate-jsonschema` unless `VALIDATE_TLS_*` / `MUXCORE_TLS_*` are set.
+- Default bind address is loopback `127.0.0.1:9665` (`VALIDATE_GRPC_ADDR` override unchanged).
+- `MUXCORE_INSECURE_DISABLE_TLS` / `MUXCORE_GRPC_INSECURE` disable inbound TLS for local development.
+
 ## [0.1.1] — 2026-08-10
 
 ### Added
