@@ -27,11 +27,11 @@ Core discovers the sidecar by capability (`input.validate`) and dials the module
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `VALIDATE_GRPC_ADDR` | `:9665` | Module gRPC listen address |
+| `VALIDATE_GRPC_ADDR` | `127.0.0.1:9665` | Module gRPC listen address (loopback; TLS by default) |
 | `VALIDATE_DATA_DIR` | `./schemas` | Directory containing JSON Schema files (`{name}.json`) |
 | `MUXCORE_GRPC_ADDR` | (required) | Core mesh gRPC address (SDK; or `--muxcore-mesh-addr`) |
 | `MUXCORE_MODULE_ID` | `input-validate-jsonschema` | Registration ID override (SDK) |
-| `MUXCORE_INSECURE_DISABLE_TLS` | unset | Set to `true` to disable TLS to core (dev only) |
+| `MUXCORE_INSECURE_DISABLE_TLS` | unset | Set to `true` to disable TLS to core and inbound gRPC (dev only) |
 
 ### Size limits
 
