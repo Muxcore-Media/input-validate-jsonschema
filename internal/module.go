@@ -16,13 +16,17 @@ import (
 	"sync"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 
+	"github.com/Muxcore-Media/input-validate-jsonschema/internal/grpctls"
 	inputvalidatev1 "github.com/Muxcore-Media/input-validate-jsonschema/muxcore/inputvalidate/v1"
 )
+
+const defaultGRPCAddr = "127.0.0.1:9665"
 
 var namedSchemaRe = regexp.MustCompile(`^[a-z][a-z0-9_.:-]{0,127}$`)
 
@@ -48,7 +52,7 @@ func NewModule(cfg Config) *Module {
 		cfg.ID = "input-validate-jsonschema"
 	}
 	if cfg.GRPCAddr == "" {
-		cfg.GRPCAddr = ":9665"
+		cfg.GRPCAddr = defaultGRPCAddr
 	}
 	if cfg.DataDir == "" {
 		cfg.DataDir = "./schemas"
@@ -56,6 +60,7 @@ func NewModule(cfg Config) *Module {
 	if v := os.Getenv("VALIDATE_GRPC_ADDR"); v != "" {
 		cfg.GRPCAddr = v
 	}
+	cfg.GRPCAddr = resolveGRPCAddr(cfg.GRPCAddr)
 	if v := os.Getenv("VALIDATE_DATA_DIR"); v != "" {
 		cfg.DataDir = v
 	}
@@ -99,7 +104,22 @@ func (m *Module) Init(ctx context.Context) error {
 
 func (m *Module) Start(ctx context.Context) error {
 	maxRecv := defaultMaxPayloadBytes + 1024
-	srv := grpc.NewServer(grpc.MaxRecvMsgSize(maxRecv))
+	tlsCfg, err := grpctls.ServerConfig()
+	if err != nil {
+		return fmt.Errorf("gRPC TLS: %w", err)
+	}
+	var grpcOpts []grpc.ServerOption
+	grpcOpts = append(grpcOpts, grpc.MaxRecvMsgSize(maxRecv))
+	if tlsCfg != nil {
+		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+		slog.Info("input-validate-jsonschema gRPC TLS enabled", "addr", m.grpcAddr)
+	} else {
+		slog.Warn("input-validate-jsonschema gRPC listening without TLS (dev only)",
+			"addr", m.grpcAddr,
+			"hint", "unset MUXCORE_INSECURE_DISABLE_TLS for production",
+		)
+	}
+	srv := grpc.NewServer(grpcOpts...)
 	m.grpcSrv = srv
 	inputvalidatev1.RegisterInputValidateServiceServer(srv, m)
 	modulesdk.RegisterSettings(srv, m.id, m)
@@ -111,6 +131,20 @@ func (m *Module) Start(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+func resolveGRPCAddr(addr string) string {
+	if !grpctls.InsecureAllowed() {
+		return addr
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "0.0.0.0" {
+		return "127.0.0.1:" + port
+	}
+	return addr
 }
 
 func (m *Module) Stop(ctx context.Context) error {

@@ -27,8 +27,8 @@ func TestModuleInfo(t *testing.T) {
 	if len(info.Capabilities) == 0 || info.Capabilities[0] != "input.validate" {
 		t.Errorf("expected input.validate capability, got %v", info.Capabilities)
 	}
-	if info.HTTPAddr != ":9665" {
-		t.Errorf("HTTPAddr = %q, want :9665", info.HTTPAddr)
+	if info.HTTPAddr != "127.0.0.1:9665" {
+		t.Errorf("HTTPAddr = %q, want 127.0.0.1:9665", info.HTTPAddr)
 	}
 }
 
