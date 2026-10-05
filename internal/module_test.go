@@ -8,18 +8,19 @@ import (
 	"testing"
 	"time"
 
+	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
+	manifest "github.com/Muxcore-Media/input-validate-jsonschema"
 	inputvalidatev1 "github.com/Muxcore-Media/input-validate-jsonschema/muxcore/inputvalidate/v1"
 )
 
 func TestModuleInfo(t *testing.T) {
-	Version = "0.1.3"
 	m := NewModule(Config{})
 	info := m.Info()
 	if info.ID == "" {
 		t.Error("module ID must not be empty")
 	}
-	if info.Version != "0.1.3" {
-		t.Errorf("version = %q, want 0.1.3", info.Version)
+	if want := modulesdk.ManifestVersion(manifest.ManifestJSON); info.Version != want {
+		t.Errorf("version = %q, want manifest version %q", info.Version, want)
 	}
 	if info.MinCoreVersion == "" {
 		t.Error("MinCoreVersion must not be empty")

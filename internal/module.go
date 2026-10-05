@@ -71,7 +71,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Input Validate JSON Schema",
-		Version:      Version,
+		Version:      moduleVersion(),
 		Roles:        []string{"infrastructure"},
 		Description:  "JSON Schema and regex based input validation provider",
 		Author:       "MuxCore",

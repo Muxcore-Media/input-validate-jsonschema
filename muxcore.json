@@ -1,7 +1,7 @@
 {
   "name": "Input Validate JSON Schema",
   "description": "JSON Schema and regex based input validation provider",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "author": "MuxCore",
   "roles": [
     "infrastructure"
